@@ -1,0 +1,82 @@
+#!/bin/env python
+import os
+import sys
+#from six.moves.urllib.parse import urlencode
+from urllib.parse import urlencode
+sys.path.insert(0, 'icrawler')
+from icrawler import ImageDownloader
+from icrawler.builtin import GoogleFeeder
+from icrawler.builtin import GoogleImageCrawler
+import requests
+from requests.auth import HTTPBasicAuth
+from multiprocessing.pool import ThreadPool
+from threading import Lock
+import random
+
+class DownloaderWithRename(ImageDownloader):
+    out_filename = ''
+    def set_out_filename(self, filename):
+        self.out_filename = filename
+
+    def get_filename(self, task, default_ext):
+        return self.out_filename + ".png"
+
+class GoogleFeederPNG(GoogleFeeder):
+    def feed(self, keyword, offset, max_num, language=None, filters=None):
+        base_url = 'https://www.google.com/search?'
+        for i in range(offset, offset + max_num, 100):
+            params = dict(
+                q=keyword,
+                ijn=int(i / 100),
+                start=i,
+                tbs='ift:png',
+                tbm='isch')
+            if language:
+                params['lr'] = 'lang_' + language
+            url = base_url + urlencode(params)
+            self.out_queue.put(url)
+            self.logger.debug('put url to url_queue: {}'.format(url))
+
+
+def TVHApi(request):
+    response = requests.get(
+        request,
+        auth=HTTPBasicAuth('rusich', 'rch5sisX'))
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception("Error: " + str(response.status_code) +
+                        " - " + response.reason)
+
+
+channels = TVHApi("http://192.168.2.2:9981/api/channel/list").get('entries')
+services = TVHApi("http://192.168.2.2:9981/api/service/list").get('entries')
+
+channel_names = []
+
+for channel in channels:
+    channel_names.append(channel.get("val"))
+
+
+store_dir = './picons/'
+cache_dir = './cache/'
+def DLThread(name):
+    if not os.path.isfile(cache_dir + name + ".png"):
+        google_crawler = GoogleImageCrawler(
+            downloader_cls=DownloaderWithRename,
+            feeder_cls=GoogleFeederPNG,
+            storage={'root_dir': cache_dir})
+        google_crawler.downloader.set_out_filename(name)
+        google_crawler.crawl(
+            keyword=name + " телеканал logo",
+            offset=0,
+            min_size=(200, 200),
+            max_size=None,
+            max_num=1)
+
+
+s_print_lock = Lock()
+with ThreadPool(processes=10) as pool:
+    results = pool.map(DLThread, channel_names)
+
+# exit(0)
