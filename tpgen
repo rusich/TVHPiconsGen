@@ -1,7 +1,6 @@
-#!/bin/env python
+#!/bin/env python3
 import os
 import sys
-#from six.moves.urllib.parse import urlencode
 from urllib.parse import urlencode
 sys.path.insert(0, 'icrawler')
 from icrawler import ImageDownloader
@@ -12,14 +11,25 @@ from requests.auth import HTTPBasicAuth
 from multiprocessing.pool import ThreadPool
 from threading import Lock
 import random
+import argparse
+import configparser
+from shutil import copyfile
+
+CONFIG = {}
+channels = []
+version = '0.1'
+tvh = None
+
 
 class DownloaderWithRename(ImageDownloader):
     out_filename = ''
+
     def set_out_filename(self, filename):
         self.out_filename = filename
 
     def get_filename(self, task, default_ext):
         return self.out_filename + ".png"
+
 
 class GoogleFeederPNG(GoogleFeeder):
     def feed(self, keyword, offset, max_num, language=None, filters=None):
@@ -38,45 +48,168 @@ class GoogleFeederPNG(GoogleFeeder):
             self.logger.debug('put url to url_queue: {}'.format(url))
 
 
-def TVHApi(request):
-    response = requests.get(
-        request,
-        auth=HTTPBasicAuth('rusich', 'rch5sisX'))
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception("Error: " + str(response.status_code) +
-                        " - " + response.reason)
-
-
-channels = TVHApi("http://192.168.2.2:9981/api/channel/list").get('entries')
-services = TVHApi("http://192.168.2.2:9981/api/service/list").get('entries')
-
-channel_names = []
-
-for channel in channels:
-    channel_names.append(channel.get("val"))
-
-
-store_dir = './picons/'
-cache_dir = './cache/'
 def DLThread(name):
-    if not os.path.isfile(cache_dir + name + ".png"):
-        google_crawler = GoogleImageCrawler(
-            downloader_cls=DownloaderWithRename,
-            feeder_cls=GoogleFeederPNG,
-            storage={'root_dir': cache_dir})
-        google_crawler.downloader.set_out_filename(name)
-        google_crawler.crawl(
-            keyword=name + " телеканал logo",
-            offset=0,
-            min_size=(200, 200),
-            max_size=None,
-            max_num=1)
+    if CONFIG['overwrite'] == False:
+        if os.path.isfile(CONFIG['cache_dir'] + name + ".png"):
+            return
+
+    google_crawler = GoogleImageCrawler(
+        downloader_cls=DownloaderWithRename,
+        feeder_cls=GoogleFeederPNG,
+        storage={'root_dir': CONFIG['cache_dir']})
+    google_crawler.downloader.set_out_filename(name)
+    google_crawler.downloader.storage.overwrite = True
+    google_crawler.crawl(
+        keyword=name + " телеканал logo",
+        offset=0,
+        min_size=(200, 200),
+        max_size=None,
+        max_num=1,
+        overwrite=CONFIG['overwrite']
+    )
 
 
-s_print_lock = Lock()
-with ThreadPool(processes=10) as pool:
-    results = pool.map(DLThread, channel_names)
+def parseArgs():
+    parser = argparse.ArgumentParser(add_help=True,
+                                     description='This tool generates picon files for TVHeadend')
+    parser.add_argument(
+        '-s', '--server', help='Server address', default='localhost')
+    parser.add_argument('-p', '--port', help='Server port',
+                        type=int, default=9981)
+    parser.add_argument('-t', '--threads',
+                        help='Number of downloader threads', type=int, default=10)
+    parser.add_argument('-w', '--overwrite', action='store_true',
+                        help='Overwrite cached files')
+    parser.add_argument('-x', '--cache-dir',
+                        help='Cache folder location', default='./cache/')
+    parser.add_argument('-i', '--picons-dir',
+                        help='Location where to store picons', default='./picons/')
+    parser.add_argument('-u', '--user', help='TVH Username', required=True)
+    parser.add_argument('-P', '--password', help='TVH Password', required=True)
+    parser.add_argument('-v', '--version', action='version', help='Show version',
+                        version='%(prog)s {}'.format(version))
 
-# exit(0)
+    #map args to config
+    args = parser.parse_args()
+    CONFIG['server'] = args.server
+    CONFIG['port'] = args.port
+    CONFIG['user'] = args.user
+    CONFIG['password'] = args.password
+    CONFIG['threads'] = args.threads
+    CONFIG['overwrite'] = args.overwrite
+    CONFIG['cache_dir'] = args.cache_dir
+    CONFIG['picons_dir'] = args.picons_dir
+    #return args
+
+
+def genPiconName(filename):
+    fn, ext = os.path.splitext(filename)
+    channel_uuid = [c for c in channels if c['val'] == fn][0]['key']
+
+    if channel_uuid.__len__() == 0:
+        return None
+
+    ch_params = tvh.get(f"idnode/load?uuid={channel_uuid}")[0]['params']
+    service_uuid = [s for s in ch_params
+                    if s['caption'] == 'Services'][0]['value'][0]
+    service = tvh.get(f'idnode/load?uuid={service_uuid}')[0]
+
+    mux_uuid = [m for m in service['params']
+                if m['caption'] == 'Mux UUID'][0]['value']
+    sid = int([m for m in service['params']
+                if m['id'] == 'sid'][0]['value'])
+    dvb_stype = int([m for m in service['params']
+                if m['id'] == 'dvb_servicetype'][0]['value'])
+
+    mux = tvh.get(f'idnode/load?uuid={mux_uuid}')[0]
+
+    polarization = [p for p in mux['params']
+                    if p['id'] == 'polarisation'][0]['value']
+    polValues = dict()
+    polValues['H'] = 0
+    polValues['V'] = 1
+    polValues['L'] = 2
+    polValues['R'] = 3
+    polarization = polValues[polarization]
+
+    orbital: str = [p for p in mux['params']
+                    if p['id'] == 'orbital'][0]['value']
+    orbital = orbital.replace('E', '')
+    orbital = orbital.replace('W', '')
+    if orbital.count('.') > 0:
+        orbital = orbital.replace('.', '')
+    else:
+        orbital += '0'
+    orbital = int(orbital)
+
+    tsid = int([p for p in mux['params'] if p['id'] == 'tsid'][0]['value'])
+    onid = int([p for p in mux['params'] if p['id'] == 'onid'][0]['value'])
+    freq = int([p for p in mux['params'] if p['id']
+                == 'frequency'][0]['value'])
+
+    hash = calcMuxHash(orbital,freq,polarization)
+    picon = f'1_0_{dvb_stype:X}_{sid:X}_{tsid:X}_{onid:X}_{hash}_0_0_0.png'
+
+    #Test for correct names
+    #picon = f'picon://1_0_{dvb_stype:X}_{sid:X}_{tsid:X}_{onid:X}_{hash}_0_0_0.png'
+    # settings_picon = [i for i in ch_params if i['id'] == 'icon'][0]['value']
+    # if picon != settings_picon:
+    #     print(f"ERROR: {fn} - my: {picon}, true: {settings_picon}")
+    # else:
+    #     print(f"{fn} - {picon}")
+
+    return picon
+
+def calcMuxHash(orbital:int, freq: int, pol: int):
+    """ Calculates hash for mux. Supports dvb-s only"""
+    hash = 0
+    hash = (orbital if orbital >= 0 else 3600 + orbital) << 16
+    hash |= (int(freq/1000) & 0x7fff) | (0x8000 if orbital == 0 else 0)
+    hash |=0x10000 #its magic number ;-)
+    return f"{hash:X}"
+
+class TVHApi:
+    def __init__(self, server, port, user, password):
+        self.server = server
+        self.port = port
+        self.user = user
+        self.password = password
+
+    def get(self, query):
+        try:
+            response = requests.get(
+                f"http://{CONFIG['server']}:{CONFIG['port']}/api/{query}",
+                auth=HTTPBasicAuth(self.user, self.password))
+        except Exception as e:
+            print('Error:\n' + str(e))
+            exit(1)
+        if response.status_code == 200:
+            return response.json()['entries']
+        else:
+            print("Error: " + str(response.status_code) + " - " + response.reason)
+            exit(response.status_code)
+
+
+if __name__ == "__main__":
+    parseArgs()
+
+    tvh = TVHApi(CONFIG['server'], CONFIG['port'],
+                 CONFIG['user'], CONFIG['password'])
+    channels = tvh.get('channel/list')
+    channel_names = []
+
+    for channel in channels:
+        channel_names.append(channel.get("val"))
+
+    print("Downloadig images from Google to cache folder")
+    with ThreadPool(processes=CONFIG['threads']) as pool:
+        results = pool.map(DLThread, channel_names)
+
+    print("Creating picons")
+    # print(genPiconName('2x2'))
+    # exit(0)
+    for file in os.listdir(CONFIG['cache_dir']):
+        picon_name = genPiconName(file)
+        #warning! dest file will be overwrited
+        copyfile(CONFIG['cache_dir']+file, CONFIG['picons_dir']+picon_name)
+    exit(0)
