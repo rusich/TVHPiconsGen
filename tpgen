@@ -73,7 +73,7 @@ def parseArgs():
     parser = argparse.ArgumentParser(add_help=True,
                                      description='This tool generates picon files for TVHeadend')
     parser.add_argument(
-        '-s', '--server', help='Server address', default='localhost')
+        '-s', '--server', help='Server address', default='localhost', required=True)
     parser.add_argument('-p', '--port', help='Server port',
                         type=int, default=9981)
     parser.add_argument('-t', '--threads',
@@ -182,12 +182,12 @@ class TVHApi:
                 auth=HTTPBasicAuth(self.user, self.password))
         except Exception as e:
             print('Error:\n' + str(e))
-            exit(1)
+            os._exit(1)
         if response.status_code == 200:
             return response.json()['entries']
         else:
             print("Error: " + str(response.status_code) + " - " + response.reason)
-            exit(response.status_code)
+            os._exit(response.status_code)
 
 
 if __name__ == "__main__":
@@ -207,9 +207,9 @@ if __name__ == "__main__":
 
     print("Creating picons")
     # print(genPiconName('2x2'))
-    # exit(0)
+    # os._exit(0)
     for file in os.listdir(CONFIG['cache_dir']):
         picon_name = genPiconName(file)
-        #warning! dest file will be overwrited
+        #warning! dest file will be overwritten
         copyfile(CONFIG['cache_dir']+file, CONFIG['picons_dir']+picon_name)
-    exit(0)
+    os._exit(0)
