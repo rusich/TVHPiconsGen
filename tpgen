@@ -2,7 +2,6 @@
 import os
 import sys
 from urllib.parse import urlencode
-sys.path.insert(0, 'icrawler')
 from icrawler import ImageDownloader
 from icrawler.builtin import GoogleFeeder
 from icrawler.builtin import GoogleImageCrawler
@@ -73,8 +72,8 @@ def parseArgs():
     parser = argparse.ArgumentParser(add_help=True,
                                      description='This tool generates picon files for TVHeadend')
     parser.add_argument(
-        '-s', '--server', help='Server address', default='localhost', required=True)
-    parser.add_argument('-p', '--port', help='Server port',
+        '-s', '--server', help='TVHeadend server address', default='localhost', required=True)
+    parser.add_argument('-p', '--port', help='TVHeadend server port',
                         type=int, default=9981)
     parser.add_argument('-t', '--threads',
                         help='Number of downloader threads', type=int, default=10)
@@ -82,7 +81,7 @@ def parseArgs():
                         help='Overwrite cached files')
     parser.add_argument('-x', '--cache-dir',
                         help='Cache folder location', default='./cache/')
-    parser.add_argument('-i', '--picons-dir',
+    parser.add_argument('-d', '--picons-dir',
                         help='Location where to store picons', default='./picons/')
     parser.add_argument('-u', '--user', help='TVH Username', required=True)
     parser.add_argument('-P', '--password', help='TVH Password', required=True)
